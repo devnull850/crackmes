@@ -1,0 +1,181 @@
+Exploring Bytecode VMs
+
+  Java and Python are two high level languages that are incredibly versatile
+and highly portable (ignoring Python 2 and 3 differences for the moment). Both
+have memory management abstractions to allow the software engineer to focus
+more on solving problems than on keeping track of their object lifecycles. This
+is accomplished by each language by providing a virtual machine that handles
+many of the tasks normally left to the software engineer in lower level
+languages and less "modern" languages (I still love you C!). The syntax of
+either language is converted to an intermediate representation that is
+understood by the respective virtual machine. For both languages the opcodes
+for the intermediate representation is a byte long. We call the intermediate
+representation, wait for it, bytecode. The virtual machines are considered
+bytecode VMs.
+
+Bytecode Reversing
+
+  I was delighted to see a binary on crackmes.one titled "ELF - BCeption." From
+the title I imagined it was an ELF executable in an ELF executable. When I
+passed the file through Ghidra's disassembler I noticed a random blob of 85
+bytes and some random memory of around 284 bytes being zeroed out. The user
+was prompted to enter an unsigned integer. The value was then "converted" to a
+string by taking each byte (remember x86 is little endian) and placing it in
+the string in the reverse order. Index zero in the string will contain the 
+least significant byte. Index 3, the final index for a 4 byte unsigned integer,
+will contain the most significant byte. Of note, this was not a C string and
+the fourth byte was not set to zero but rather 4.
+
+  After the memory location of 284 bytes was zero filled, the user input
+"string" was copied to the memory location at 18 bytes offset. The 4 was copied
+to 20 bytes offset. A 4 was also moved to 276 bytes offset. A function is then
+entered that has the memory location, the number 85, and the blob of 85 bytes
+passed in as parameters.
+
+Enter the VM
+
+  A zero is copied to 276 bytes offset from the memory location and a jump to
+almost the end of the function is executed. The block of code jumped to checks
+the value at the memory location if it is less than or equal to the value 85
+passed in. If true, we jump back to almost the beginning of the function. We
+found ourselves a loop!
+
+  Inside the loop, we find a big if/else if statement with values being checked
+from 1 to 22. This is beginning to smell a little like a compiler/decompiler
+pass or more accurately an interpretation pass. Each value, 1 to 22, represents
+an operation (op code). All the instructions are two bytes long with the
+exception of the bytecode op code value 1. That is a three byte instruction. 
+The table below breaks down each opcode and the operation it performs.
+
+1 -> 01 xx yy	xx: index into a memory region
+                yy: immediate value to copy
+
+                memory[xx] = yy;
+
+2 -> 02 xy	x: upper nibble is an index into a memory region
+                y: lower nibble is an index into a memory region
+
+                memory[x] = memory[y];
+
+3 -> 03 xy	x: upper nibble is an index into a memory region
+                y: lower nibble is an index into a memory region
+
+                memory[x] = memory[x] + memory[y];
+
+4 -> 04 xy	x: upper nibble is an index into a memory region
+                y: lower nibble is an index into a memory region
+
+                memory[x] = memory[x] - memory[y];
+
+5 -> 05 xy	x: upper nibble is an index into a memory region
+                y: lower nibble is an index into a memory region
+
+                memory[x] = memory[x] * memory[y];
+
+6 -> 06 xy	x: upper nibble is an index into a memory region
+                y: lower nibble is an index into a memory region
+
+                memory[x] = memory[x] / memory[y];
+
+                NOTE: There appears to be no checking of the divisor being
+                      zero. A potential vulnerability???
+
+7 -> 07 xy	x: upper nibble is an index into a memory region
+                y: lower nibble is an index into a memory region
+
+                memory[x] = memory[x] ^ memory[y];
+
+8 -> 08 xy	x: upper nibble is an index into a memory region
+                y: lower nibble is an index into a memory region
+
+                memory[x] = memory[x] | memory[y];
+
+9 -> 09 xy	x: upper nibble is an index into a memory region
+                y: lower nibble is an index into a memory region
+
+                memory[x] = memory[x] & memory[y];
+
+a -> 0a xy	x: upper nibble is an index into a memory region
+                y: lower nibble is an index into a memory region
+
+                memory[x] = !memory[y];
+
+b -> 0b xy	x: upper nibble is an index into a memory region
+                y: lower nibble is an index into a memory region
+
+                memory[x] = memory[x] << memory[y];
+
+c -> 0c xy	x: upper nibble is an index into a memory region
+                y: lower nibble is an index into a memory region
+
+                memory[x] = memory[x] >> memory[y];
+
+d -> 0d xx	xx: immediate value that represents an instruction address 
+
+                Jump to the location xx if the equal flag is set.
+                The equal flag is at offset 0xf in the memory region.
+
+e -> 0e xx	xx: immediate value that represents an instruction address 
+
+                Jump to the location xx if the equal flag is NOT set.
+                The equal flag is at offset 0xf in the memory region.
+
+f -> 0f xx	xx: immediate value that represents an instruction address 
+
+                Jump to the location xx if the greater than flag is set.
+                The greater than flag is at offset 0x10 in the memory region.
+
+10 -> 10 xx	xx: immediate value that represents an instruction address 
+
+                Jump to the location xx if the greater than flag is NOT set.
+                The greater than flag is at offset 0x10 in the memory region.
+
+11 -> 11 xx	xx: immediate value that represents an instruction address 
+
+                Jump to the location xx if the less than flag is set.
+                The less than flag is at offset 0x11 in the memory region.
+
+12 -> 12 xx	xx: immediate value that represents an instruction address
+
+                Jump to the location xx if the less than flag is NOT set.
+                The less than flag is at offset 0x11 in the memory region.
+
+13 -> 13 xx	xx: index into a memory region
+
+                Indexes the memory region by first taking the byte at offset
+                0x114 in the memory region adding 0x12 and using that result
+                as an index. Copies the value at memory[xx] to memory location
+                calculated. Increments the value at memory[0x114].
+
+                memory[memory[0x114] + 0x12] = memory[xx];
+                memory[0x114] = memory[0x114] + 1;
+
+14 -> 14 xx	xx: index into a memory region
+
+                Indexes the memory region by first taking the byte at offset
+                0x114 in the memory region adding 0x12 and using that result
+                as the index. Copies the value at the location. Decrements
+                the value at memory[0x114].
+
+                memory[xx] = memory[memory[0x114] + 0x12];
+                memory[0x114] = memory[0x114] - 1;
+
+15 -> 15 xy	x: upper nibble is an index into a memory region
+                y: lower nibble is an index into a memory region
+
+                compares the bytes at memory[x] and memory[y] and sets the
+                appropriate flags
+
+                offset 0xf into the memory region is a flag that indicates two
+                values are equal
+
+                offset 0x10 into the memory region is a flag that indicates
+                memory[x] is greater than memory[y]
+
+                offset 0x11 into the memory region is a flag that indicates
+                memory[x] is less than memory[y]
+
+16 -> 16 xx	xx: index into a memory region
+
+                exit and return the value at memory[xx]
+
